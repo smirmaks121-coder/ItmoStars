@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetWatcher Topology Pro</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+    <h1>[ NetWatcher Pro: Интеллектуальная SIEM/XDR система защиты домашней сети ]</h1>
+    
+    <div class="meta-info">
+        Локальный инспектор: <strong>{{ local_ip }}</strong> <span id="scoreBadge" style="display: none; margin-left: 20px; font-weight: bold;"></span>
+    </div>
+
+    <div class="controls">
+        <button id="scanBtn">ЗАПУСТИТЬ ИБ-ИНСПЕКЦИЮ</button>
+        <button id="baselineBtn" style="display: none;">ЗАФИКСИРОВАТЬ БЕЛЫЙ СПИСОК СЕТИ</button>
+        <button id="reportBtn" style="display: none;">СКАЧАТЬ HTML-ОТЧЕТ БЕЗОПАСНОСТИ</button>
+    </div>
+    
+    <div id="status"></div>
+    
+    <div id="baselineInfo" class="info-box" style="display: none;"></div>
+    <div id="securityAlerts" class="alert-box" style="display: none;"></div>
+
+    <div id="networkMap" class="network-container" style="display: none;">
+        <div id="routerZone" class="network-center"></div>
+        <div id="clientsZone" class="network-clients"></div>
+    </div>
+
+<script>
+    var globalDevicesData = [];
+    var globalAlertsData = [];
+    var currentScannedMacs = [];
+    var globalScore = 100;
+
+    document.getElementById('scanBtn').onclick = async function() {
+        var btn = this;
+        var status = document.getElementById('status');
+        var alertsBox = document.getElementById('securityAlerts');
+        var infoBox = document.getElementById('baselineInfo');
+        var networkMap = document.getElementById('networkMap');
+        var routerZone = document.getElementById('routerZone');
+        var clientsZone = document.getElementById('clientsZone');
+        var baselineBtn = document.getElementById('baselineBtn');
+        var reportBtn = document.getElementById('reportBtn');
+        var scoreBadge = document.getElementById('scoreBadge');
+
+        btn.disabled = true;
+        baselineBtn.style.display = 'none';
+        reportBtn.style.display = 'none';
+        scoreBadge.style.display = 'none';
+        status.textContent = '>> Запуск SIEM-модулей, пассивный анализ TTL сокетов и расчет индекса защищенности...';
+        alertsBox.style.display = 'none';
+        infoBox.style.display = 'none';
+        networkMap.style.display = 'none';
+        routerZone.innerHTML = '';
+        clientsZone.innerHTML = '';
+
+        try {
+            var response = await fetch('/api/scan');
+            if (!response.ok) throw new Error('Ошибка обращения к серверу анализа');
+            
+            var data = await response.json();
+            if (data.status !== 'success') throw new Error(data.message || 'Ошибка модулей XDR');
+
+            globalDevicesData = data.devices;
+            globalAlertsData = data.alerts;
+            currentScannedMacs = data.macs;
+            globalScore = data.score;
+
+            status.textContent = '>> Инспекция завершена. Сетевой граф построен. Узлов в топологии: ' + data.devices.length;
+
+            // Вывод индекса безопасности
+            scoreBadge.textContent = 'ИНДЕКС БЕЗОПАСНОСТИ СЕТИ: ' + data.score + '%';
+            if (data.score >= 80) { scoreBadge.className = 'success'; } 
+            else if (data.score >= 50) { scoreBadge.style.color = '#ffa500'; } 
+            else { scoreBadge.className = 'danger'; }
+            scoreBadge.style.display = 'inline';
+
+            if (data.first_run) {
+                infoBox.innerText = '[ СИСТЕМА ДЕТЕКЦИИ: ПЕРВЫЙ ЗАПУСК ]\nРекомендуется зафиксировать "Белый список" устройств, чтобы система блокировала новые несанкционированные подключения.';
+                infoBox.style.display = 'block';
+                baselineBtn.style.display = 'inline-block';
+            } else {
+                baselineBtn.style.display = 'inline-block';
+                baselineBtn.textContent = 'ОБНОВИТЬ БЕЛЫЙ СПИСОК';
+            }
+            reportBtn.style.display = 'inline-block';
+
+            if (data.alerts && data.alerts.length > 0) {
+                var alertText = '[ КРИТИЧЕСКИЙ СИГНАЛ ТРЕВОГИ SIEM ]\n\n';
+                data.alerts.forEach(function(alert) {
+                    alertText += '• ' + alert.message + '\n';
+                });
+                alertsBox.innerText = alertText;
+                alertsBox.style.display = 'block';
+            }
+
+            data.devices.forEach(function(device) {
+                var card = document.createElement('div');
+                card.className = 'node-card';
+                if (device.status === 'rogue') {
+                    card.classList.add('rogue-node');
+                }
+                
+                var title = document.createElement('div');
+                title.className = 'node-title';
+                title.textContent = device.hostname;
+                card.appendChild(title);
+
+                var info = document.createElement('div');
+                var statusText = (device.status === 'rogue') ? '<span class="danger">НЕИЗВЕСТНЫЙ УЗЕЛ (УГРОЗА)</span>' : '<span class="success">Белый список (Проверено)</span>';
+                info.innerHTML = '<strong>IP:</strong> ' + device.ip + '<br><strong>MAC:</strong> ' + device.mac + '<br><strong>ОС (TTL):</strong> ' + device.os + '<br><strong>Статус:</strong> ' + statusText;
+                card.appendChild(info);
+
+                var portContainer = document.createElement('div');
+                portContainer.className = 'port-box';
+                
+                var btnPort = document.createElement('button');
+                btnPort.style.padding = '2px 6px';
+                btnPort.style.fontSize = '11px';
+                btnPort.textContent = 'Анализ служб';
+                
+                var resDiv = document.createElement('div');
+                resDiv.style.marginTop = '5px';
+                resDiv.style.fontSize = '11px';
+
+                btnPort.onclick = async function() {
+                    btnPort.disabled = true;
+                    resDiv.textContent = 'Сканирование...';
+                    try {
+                        var pResponse = await fetch('/api/scan_ports', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ip: device.ip })
+                        });
+                        var pData = await pResponse.json();
+                        if (pData.status === 'success') {
+                            if (pData.ports.length === 0) {
+                                resDiv.textContent = '✓ Сервисы защищены';
+                                resDiv.className = 'success';
+                            } else {
+                                var text = '⚠️ Найдена уязвимость:\n';
+                                pData.ports.forEach(function(p) {
+                                    text += '\n• СЛУЖБА: ' + p.service + '\n• УГРОЗА: ' + p.threat + '\n• РЕШЕНИЕ: ' + p.fix + '\n';
+                                });
+                                resDiv.innerText = text;
+                                resDiv.className = 'danger';
+                            }
+                        } else {
+                            resDiv.textContent = 'Ошибка';
+                            resDiv.className = 'danger';
+                        }
+                    } catch (e) {
+                        resDiv.textContent = 'Сбой сети';
+                        resDiv.className = 'danger';
+                    }
+                    btnPort.style.display = 'none';
+                };
+
+                portContainer.appendChild(btnPort);
+                portContainer.appendChild(resDiv);
+                card.appendChild(portContainer);
+
+                if (device.ip.endsWith('.1')) {
+                    card.classList.add('router');
+                    title.textContent = '🌐 ШЛЮЗ ПЕРИМЕТРА: ' + device.hostname;
+                    routerZone.appendChild(card);
+                } else {
+                    clientsZone.appendChild(card);
+                }
+            });
+
+            if (routerZone.innerHTML === '') {
+                routerZone.innerHTML = '<div class="node-card router fw-bold">🌐 СЕТЕВОЙ ШЛЮЗ</div>';
+            }
+
+            networkMap.style.display = 'flex';
+        } catch (error) {
+            status.textContent = '>> Сбой ИБ-визуализатора: ' + error.message;
+            status.className = 'danger';
+        }
+        btn.disabled = false;
+    };
+
+    document.getElementById('baselineBtn').onclick = async function() {
+        try {
+            var response = await fetch('/api/save_baseline', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ macs: currentScannedMacs })
+            });
+            var data = await response.json();
+            alert(data.message || 'Успешно зафиксировано!');
+            document.getElementById('scanBtn').click();
+        } catch (e) {
+            alert('Ошибка фиксации');
+        }
+    };
+
+    document.getElementById('reportBtn').onclick = async function() {
+        try {
+            var response = await fetch('/api/export_report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ devices: globalDevicesData, alerts: globalAlertsData, score: globalScore })
+            });
+            var blob = await response.blob();
+            var url = window.URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'security_report.html';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        } catch (e) {
+            alert('Ошибка экспорта отчета');
+        }
+    };
+</script>
+</body>
+</html>
