@@ -16,19 +16,4 @@
 * **Backend:** Python 3, Flask
 * **Frontend:** HTML5, CSS3, JavaScript (Vanilla ES6)
 
-## 📦 Инструкция по развертыванию
-1. Клонировать репозиторий и перейти в папку:
-   ```bash
-   git clone <ВАША_ССЫЛКА_НА_РЕПОЗИТОРИЙ>
-   cd netwatcher_project
-   ```
-2. Создать и активировать виртуальное окружение:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-3. Установить зависимости и запустить:
-   ```bash
-   pip install -r requirements.txt
-   python3 app.py
-   ```
+
